@@ -1,5 +1,4 @@
 use plotters::prelude::*;
-use plotters::style::Palette99;
 use std::fs::create_dir_all;
 use crate::data_structures::{DatasetM, AnomType};
 
@@ -179,11 +178,6 @@ pub fn plot_by_cluster(ds: &DatasetM, z: &[usize], out_path: &str) {
     let m_out = ds.m_out;
     let kmax = 1 + z.iter().copied().max().unwrap_or(0);
 
-    // palette as ready-to-use styles
-    let palette: Vec<ShapeStyle> = (0..kmax)
-        .map(|k| Palette99::pick(k).stroke_width(2))
-        .collect();
-
     // y-range per output
     let mut y_min = vec![f64::INFINITY; m_out];
     let mut y_max = vec![f64::NEG_INFINITY; m_out];
@@ -199,9 +193,23 @@ pub fn plot_by_cluster(ds: &DatasetM, z: &[usize], out_path: &str) {
         y_min[a] -= pad; y_max[a] += pad;
     }
 
-    // counts
+    // counts and find main cluster (largest)
     let mut counts = vec![0usize; kmax];
     for &zi in z { counts[zi] += 1; }
+    let main_cluster = (0..kmax).max_by_key(|&k| counts[k]).unwrap_or(0);
+
+    // Define distinct colors for clusters
+    let cluster_colors = vec![
+        RGBColor(100, 100, 100),    // k0: light gray (main cluster - semi-transparent)
+        RGBColor(255, 0, 0),        // k1: red
+        RGBColor(0, 0, 255),         // k2: blue  
+        RGBColor(0, 255, 0),        // k3: green
+        RGBColor(255, 0, 255),      // k4: magenta
+        RGBColor(0, 255, 255),      // k5: cyan
+        RGBColor(255, 165, 0),      // k6: orange
+        RGBColor(128, 0, 128),      // k7: purple
+        RGBColor(255, 192, 203),    // k8: pink
+    ];
 
     let root = BitMapBackend::new(out_path, (1200, 320 * m_out as u32)).into_drawing_area();
     root.fill(&WHITE).unwrap();
@@ -219,11 +227,25 @@ pub fn plot_by_cluster(ds: &DatasetM, z: &[usize], out_path: &str) {
 
         chart.configure_mesh().x_desc("t").y_desc("y").label_style(("sans-serif", 12)).draw().unwrap();
 
+        // First pass: draw main cluster (semi-transparent)
         for (i, c) in ds.curves.iter().enumerate() {
-            let style = palette[z[i]].clone();
-            let pts = (0..n).map(|ix| (ds.t[ix], c.y[(ix, a)]));
-            chart.draw_series(LineSeries::new(pts, style)).unwrap();
+            if z[i] == main_cluster {
+                let color = &cluster_colors[z[i] % cluster_colors.len()];
+                let style = color.stroke_width(1); // thin line for main cluster
+                let pts = (0..n).map(|ix| (ds.t[ix], c.y[(ix, a)]));
+                chart.draw_series(LineSeries::new(pts, style)).unwrap();
+            }
+        }
+
+        // Second pass: draw anomaly clusters (thick, opaque)
+        for (i, c) in ds.curves.iter().enumerate() {
+            if z[i] != main_cluster {
+                let color = &cluster_colors[z[i] % cluster_colors.len()];
+                let style = color.stroke_width(3); // thick line for anomalies
+                let pts = (0..n).map(|ix| (ds.t[ix], c.y[(ix, a)]));
+                chart.draw_series(LineSeries::new(pts, style)).unwrap();
+            }
         }
     }
-    let _ = root.titled("Curves colored by assigned cluster", ("sans-serif", 14));
+    let _ = root.titled("Curves colored by assigned cluster (anomalies on top)", ("sans-serif", 14));
 }

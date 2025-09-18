@@ -6,6 +6,7 @@ pub mod wavelets;
 pub mod dp;
 pub mod plotting;
 pub mod utils;
+pub mod diagnostics;
 
 pub use data_structures::*;
 pub use anomaly::*;
@@ -15,3 +16,4 @@ pub use wavelets::*;
 pub use dp::*;
 pub use plotting::*;
 pub use utils::*;
+pub use diagnostics::*;
