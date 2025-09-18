@@ -1,7 +1,15 @@
 [package]
-name = "ICM-Wavelet-DP"
+name = "icm-wavelet-dp"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+
+[[bin]]
+name = "icm-wavelet-dp"
+path = "src/main.rs"
+
+[lib]
+name = "icm_wavelet_dp"
+path = "src/lib.rs"
 
 [dependencies]
 ndarray = "0.16.1"
