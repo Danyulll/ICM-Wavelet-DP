@@ -19,9 +19,9 @@ fn create_mixed_anomaly_dataset(
     contam: f64,
     anomaly_types: &[AnomType],
 ) -> LabeledDatasetM {
-    let n = 32;
+    let n = 100;
     let m_out = 3;
-    let p = 8;
+    let p = 64;
     let t = linspace(0.0, 1.0, n);
     let x = make_wavelet_design(n, p, wavelets::DesignKind::Haar);
 
@@ -117,9 +117,9 @@ fn run_dataset(
     };
 
     // sampler controls
-    let iters = 1200usize;
-    let burnin = 600usize;
-    let thin = 1usize;
+    let iters = 10000usize;
+    let burnin = 2000usize;
+    let thin = 5usize;
 
     // Initialize MCMC diagnostics
     let mut diagnostics = diagnostics::MCMCDiagnostics::new();
