@@ -55,8 +55,7 @@ fn create_mixed_anomaly_dataset(
     let kx_norm = build_kx(&t, fam, &KernelHyper { 
         ell: 0.22, 
         alpha: 1.0, 
-        period: 1.0, 
-        gamma: 2.0 
+        period: 1.0
     });
     let mut b_norm = Array2::<f64>::zeros((m_out, m_out));
     for i in 0..m_out { b_norm[(i,i)] = 1.0; }
@@ -382,7 +381,6 @@ fn run_dataset_with_output(
             ell: Uniform::new(0.08, 0.40).unwrap().sample(rng),
             alpha: Uniform::new(0.5, 2.0).unwrap().sample(rng),
             period: Uniform::new(0.5, 2.0).unwrap().sample(rng),
-            gamma: Uniform::new(1.0, 3.0).unwrap().sample(rng),
         };
         let c = Cluster::new(m_out, fam, hyp, t, p);
         clusters.push(c);

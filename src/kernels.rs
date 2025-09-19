@@ -8,7 +8,6 @@ pub enum KernelFamily {
     RQ,           // Rational Quadratic
     Periodic,     // Periodic
     Exponential,  // Ornstein-Uhlenbeck
-    GammaExp,     // Gamma-Exponential
     White,        // White Noise
 }
 
@@ -19,7 +18,6 @@ pub const AVAIL_FAMS: &[KernelFamily] = &[
     KernelFamily::RQ,
     KernelFamily::Periodic,
     KernelFamily::Exponential,
-    KernelFamily::GammaExp,
     KernelFamily::White,
 ];
 
@@ -28,7 +26,6 @@ pub struct KernelHyper {
     pub ell: f64,
     pub alpha: f64,    // For RQ kernel
     pub period: f64,   // For Periodic kernel
-    pub gamma: f64,    // For Gamma-Exponential kernel
 }
 
 impl Default for KernelHyper {
@@ -37,7 +34,6 @@ impl Default for KernelHyper {
             ell: 0.25,
             alpha: 1.0,     // Default for RQ kernel
             period: 1.0,    // Default period
-            gamma: 2.0,     // Default for Gamma-Exp (SE-like)
         }
     }
 }
@@ -81,12 +77,6 @@ pub fn exp_corr(r: f64, ell: f64) -> f64 {
     (-r / ell_safe).exp().clamp(0.0, 1.0)
 }
 
-// Gamma-Exponential kernel
-pub fn gamma_exp_corr(r: f64, ell: f64, gamma: f64) -> f64 {
-    let ell_safe = ell.max(1e-6);
-    let gamma_safe = gamma.max(1e-6).min(5.0);
-    (-(r / ell_safe).powf(gamma_safe)).exp().clamp(0.0, 1.0)
-}
 
 // White noise kernel
 pub fn white_corr(r: f64, _ell: f64) -> f64 {
@@ -101,7 +91,6 @@ pub fn base_corr(fam: KernelFamily, r: f64, h: &KernelHyper) -> f64 {
         KernelFamily::RQ => rq_corr(r, h.ell, h.alpha),
         KernelFamily::Periodic => periodic_corr(r, h.ell, h.period),
         KernelFamily::Exponential => exp_corr(r, h.ell),
-        KernelFamily::GammaExp => gamma_exp_corr(r, h.ell, h.gamma),
         KernelFamily::White => white_corr(r, h.ell),
     }
 }
@@ -111,20 +100,20 @@ fn validate_kernel_params(fam: KernelFamily, h: &KernelHyper) -> KernelHyper {
     let mut safe_h = h.clone();
     
     // Ensure ell is always positive and reasonable
-    safe_h.ell = safe_h.ell.max(1e-6).min(10.0);
+    safe_h.ell = safe_h.ell.max(1e-4).min(5.0);
     
     match fam {
         KernelFamily::RQ => {
             // RQ kernel: alpha should be positive, not too small
-            safe_h.alpha = safe_h.alpha.max(0.1).min(10.0);
+            safe_h.alpha = safe_h.alpha.max(0.2).min(5.0);
         },
         KernelFamily::Periodic => {
             // Periodic kernel: period should be positive, reasonable range
-            safe_h.period = safe_h.period.max(0.1).min(10.0);
+            safe_h.period = safe_h.period.max(0.2).min(5.0);
         },
-        KernelFamily::GammaExp => {
-            // Gamma-Exponential: gamma should be in reasonable range
-            safe_h.gamma = safe_h.gamma.max(0.5).min(5.0);
+        KernelFamily::Exponential => {
+            // Exponential kernel: ensure ell is not too small
+            safe_h.ell = safe_h.ell.max(1e-3).min(2.0);
         },
         _ => {
             // For other kernels, just ensure reasonable ell

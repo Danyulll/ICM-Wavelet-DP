@@ -17,14 +17,13 @@ pub struct ICM {
     pub linv: Vec<Array2<f64>>,
     pub logdet_blocks: Vec<f64>,
     // Carlin–Chib shadows (for other families)
-    pub shadow_ell: [f64; 8], // All kernel families
+    pub shadow_ell: [f64; 7], // All kernel families
     // MH steps
     pub mh_step_ell: f64,
     pub mh_step_eta: f64,
     pub mh_step_b: f64,
     pub mh_step_alpha: f64,
     pub mh_step_period: f64,
-    pub mh_step_gamma: f64,
     pub mh_t: usize,
 }
 
@@ -45,13 +44,12 @@ impl ICM {
             l: Vec::new(),
             linv: Vec::new(),
             logdet_blocks: Vec::new(),
-            shadow_ell: [hyp.ell, hyp.ell, hyp.ell, hyp.ell, hyp.ell, hyp.ell, hyp.ell, hyp.ell],
+            shadow_ell: [hyp.ell, hyp.ell, hyp.ell, hyp.ell, hyp.ell, hyp.ell, hyp.ell],
             mh_step_ell: 0.10,
             mh_step_eta: 0.25,
             mh_step_b: 0.10,
             mh_step_alpha: 0.15,
             mh_step_period: 0.15,
-            mh_step_gamma: 0.15,
             mh_t: 0,
         };
         icm.rebuild_fonly_blocks(t);
@@ -66,8 +64,7 @@ impl ICM {
             KernelFamily::RQ => 3,
             KernelFamily::Periodic => 4,
             KernelFamily::Exponential => 5,
-            KernelFamily::GammaExp => 6,
-            KernelFamily::White => 7,
+            KernelFamily::White => 6,
         }
     }
 
@@ -147,21 +144,59 @@ impl ICM {
             }
         }
 
-        // jittered chol
+        // jittered chol with fallback to SE kernel
         let eye = Array2::<f64>::eye(dim);
-        let mut jitter = 1e-8_f64;  // Start with small jitter
-        let max_jitter = 1e-1_f64;  // Allow larger jitter
+        let mut jitter = 1e-6_f64;  // Start with larger jitter
+        let max_jitter = 1e0_f64;   // Allow much larger jitter
         let l = loop {
             let try_k = &k + &(eye.clone() * jitter);
             match try_k.cholesky(UPLO::Lower) {
                 Ok(l) => break l,
                 Err(e) => {
-                    jitter *= 2.0;  // Double jitter each time
+                    jitter *= 1.5;  // Increase jitter more gradually
                     if jitter > max_jitter { 
                         eprintln!("Cholesky failed with jitter {:.2e}, max_jitter {:.2e}", jitter, max_jitter);
-                        eprintln!("Kernel family: {:?}, ell: {:.6}, alpha: {:.6}, period: {:.6}, gamma: {:.6}", 
-                                 self.fam, self.hyp.ell, self.hyp.alpha, self.hyp.period, self.hyp.gamma);
-                        panic!("chol failed full ICM: {:?}", e); 
+                        eprintln!("Kernel family: {:?}, ell: {:.6}, alpha: {:.6}, period: {:.6}", 
+                                 self.fam, self.hyp.ell, self.hyp.alpha, self.hyp.period);
+                        eprintln!("Falling back to SE kernel with safe parameters...");
+                        
+                        // Fallback: rebuild with SE kernel and safe parameters
+                        let safe_hyp = crate::kernels::KernelHyper {
+                            ell: 0.25,
+                            alpha: 1.0,
+                            period: 1.0,
+                        };
+                        let safe_kx = crate::kernels::build_kx(t, crate::kernels::KernelFamily::SE, &safe_hyp);
+                        
+                        // Rebuild full covariance with SE kernel
+                        let mut safe_k = Array2::<f64>::zeros((dim, dim));
+                        for a in 0..m {
+                            for bidx in 0..m {
+                                let coef = self.b[(a, bidx)];
+                                if coef.abs() < 1e-16 { continue; }
+                                let mut sub = safe_k.slice_mut(s![a*n..(a+1)*n, bidx*n..(bidx+1)*n]);
+                                for i in 0..n {
+                                    for j in 0..n {
+                                        sub[(i, j)] += coef * safe_kx[(i, j)];
+                                    }
+                                }
+                            }
+                        }
+                        for a in 0..m {
+                            for i in 0..n {
+                                safe_k[(a*n+i, a*n+i)] += self.eta[a];
+                            }
+                        }
+                        
+                        // Try Cholesky with SE kernel
+                        let safe_try_k = &safe_k + &(eye.clone() * 1e-6);
+                        match safe_try_k.cholesky(UPLO::Lower) {
+                            Ok(l) => break l,
+                            Err(_) => {
+                                eprintln!("Even SE kernel failed. This is a serious numerical issue.");
+                                panic!("chol failed full ICM: {:?}", e);
+                            }
+                        }
                     }
                 }
             }
@@ -214,14 +249,14 @@ pub fn simulate_icm_curves(
     }
     // jittered chol
     let eye = Array2::<f64>::eye(dim);
-    let mut jitter = 0.0_f64;
-    let max_jitter = 1e-2_f64;
+    let mut jitter = 1e-6_f64;
+    let max_jitter = 1e0_f64;
     let l = loop {
         let try_k = &k + &(eye.clone() * jitter);
         match try_k.clone().cholesky(UPLO::Lower) {
             Ok(l) => break l,
             Err(_) => {
-                jitter = if jitter == 0.0 { 1e-10 } else { jitter * 10.0 };
+                jitter *= 1.5;
                 if jitter > max_jitter { panic!("chol failed simulate"); }
             }
         }

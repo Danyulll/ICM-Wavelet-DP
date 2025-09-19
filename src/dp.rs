@@ -139,13 +139,9 @@ pub fn mh_update_icm(
     let d_period: f64 = Normal::new(0.0, c.icm.mh_step_period).unwrap().sample(rng);
     prop_period.icm.hyp.period = (c.icm.hyp.period.ln() + d_period).exp().clamp(0.1, 10.0);
     
-    // propose gamma (log space) for Gamma-Exponential kernel
-    let mut prop_gamma = prop_period.clone();
-    let d_gamma: f64 = Normal::new(0.0, c.icm.mh_step_gamma).unwrap().sample(rng);
-    prop_gamma.icm.hyp.gamma = (c.icm.hyp.gamma.ln() + d_gamma).exp().clamp(0.5, 5.0);
 
     // propose η (log space, per-output)
-    let mut prop2 = prop_gamma.clone();
+    let mut prop2 = prop_period.clone();
     for e in prop2.icm.eta.iter_mut() {
         let de: f64 = Normal::new(0.0, c.icm.mh_step_eta).unwrap().sample(rng);
         *e = (e.ln() + de).exp().clamp(1e-8, 1.0);
@@ -180,7 +176,6 @@ pub fn mh_update_icm(
     let s_ell = log_post_icm_with_marginal(&prop, members, t, x_block, prior);
     let s_alpha = log_post_icm_with_marginal(&prop_alpha, members, t, x_block, prior);
     let s_period = log_post_icm_with_marginal(&prop_period, members, t, x_block, prior);
-    let s_gamma = log_post_icm_with_marginal(&prop_gamma, members, t, x_block, prior);
     let s_eta = log_post_icm_with_marginal(&prop2, members, t, x_block, prior);
     let s_b = log_post_icm_with_marginal(&prop3, members, t, x_block, prior);
 
@@ -200,10 +195,6 @@ pub fn mh_update_icm(
         c.icm.hyp.period = prop_period.icm.hyp.period; 
     }
     
-    let acc_gamma = (s_gamma - s_cur).exp().min(1.0);
-    if Uniform::new(0.0,1.0).unwrap().sample(rng) < acc_gamma { 
-        c.icm.hyp.gamma = prop_gamma.icm.hyp.gamma; 
-    }
     
     let acc_eta = (s_eta - s_cur).exp().min(1.0);
     if Uniform::new(0.0,1.0).unwrap().sample(rng) < acc_eta { 
@@ -222,7 +213,6 @@ pub fn mh_update_icm(
     c.icm.mh_step_ell = (c.icm.mh_step_ell * upd(acc_ell)).clamp(0.02, 0.5);
     c.icm.mh_step_alpha = (c.icm.mh_step_alpha * upd(acc_alpha)).clamp(0.05, 0.8);
     c.icm.mh_step_period = (c.icm.mh_step_period * upd(acc_period)).clamp(0.05, 0.8);
-    c.icm.mh_step_gamma = (c.icm.mh_step_gamma * upd(acc_gamma)).clamp(0.05, 0.8);
     c.icm.mh_step_eta = (c.icm.mh_step_eta * upd(acc_eta)).clamp(0.05, 0.8);
     c.icm.mh_step_b = (c.icm.mh_step_b * upd(acc_b)).clamp(0.02, 0.5);
 }
