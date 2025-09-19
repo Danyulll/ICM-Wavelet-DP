@@ -98,6 +98,10 @@ pub fn plot_dataset_icm(ds: &DatasetM, labels: Option<&[bool]>, out_path: &str) 
 }
 
 pub fn plot_dataset_colored(ds: &DatasetM, labels: &[AnomType], out_path: &str) {
+    plot_dataset_colored_with_title(ds, labels, out_path, "Dataset - Before Clustering");
+}
+
+pub fn plot_dataset_colored_with_title(ds: &DatasetM, labels: &[AnomType], out_path: &str, title: &str) {
     if let Some(parent) = std::path::Path::new(out_path).parent() { let _ = create_dir_all(parent); }
 
     let n = ds.t.len();
@@ -154,7 +158,7 @@ pub fn plot_dataset_colored(ds: &DatasetM, labels: &[AnomType], out_path: &str) 
         let mut chart = ChartBuilder::on(&areas[a])
             .margin(15).set_left_and_bottom_label_area_size(40)
             .caption(
-                format!("Multitype anomalies • Output {}  |  {}", a,
+                format!("{} • Output {}  |  {}", title, a,
                     counts.iter().map(|(k,v)| format!("{}:{}",k,v)).collect::<Vec<_>>().join("  ")),
                 ("sans-serif", 18))
             .build_cartesian_2d(x0..x1, y_min[a]..y_max[a]).unwrap();
@@ -172,6 +176,10 @@ pub fn plot_dataset_colored(ds: &DatasetM, labels: &[AnomType], out_path: &str) 
 }
 
 pub fn plot_by_cluster(ds: &DatasetM, z: &[usize], out_path: &str) {
+    plot_by_cluster_with_title(ds, z, out_path, "Dataset - After Clustering");
+}
+
+pub fn plot_by_cluster_with_title(ds: &DatasetM, z: &[usize], out_path: &str, title: &str) {
     if let Some(parent) = std::path::Path::new(out_path).parent() { let _ = create_dir_all(parent); }
 
     let n = ds.t.len();
@@ -220,7 +228,7 @@ pub fn plot_by_cluster(ds: &DatasetM, z: &[usize], out_path: &str) {
         let mut chart = ChartBuilder::on(&areas[a])
             .margin(15).set_left_and_bottom_label_area_size(40)
             .caption(
-                format!("Post-clustering • Output {}  |  {}", a,
+                format!("{} • Output {}  |  {}", title, a,
                     (0..kmax).map(|k| format!("k{}:{}",k,counts[k])).collect::<Vec<_>>().join("  ")),
                 ("sans-serif", 18))
             .build_cartesian_2d(x0..x1, y_min[a]..y_max[a]).unwrap();

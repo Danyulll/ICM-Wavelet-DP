@@ -3,8 +3,8 @@
 #SBATCH --account=def-dsteph
 #SBATCH --time=48:00:00
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=1
-#SBATCH --mem=8G
+#SBATCH --cpus-per-task=12
+#SBATCH --mem=16G
 #SBATCH --output=%x-%j.out
 #SBATCH --error=%x-%j.err
 
@@ -22,10 +22,11 @@ module load rust/1.85.0
 # Prefer oneAPI MKL; fall back to older IMKL name if that’s what your cluster has
 module load intel-oneapi-mkl || module load imkl || true
 
-# 1) Keep all math libs strictly single-threaded (you're running serial)
+# 1) Configure threading for multi-threaded Rust application
+# Each Rust thread will use 1 CPU core, so limit math libs to 1 thread per core
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
-export OPENBLAS_NUM_THREADS=8
+export OPENBLAS_NUM_THREADS=1
 export BLIS_NUM_THREADS=1
 export VECLIB_MAXIMUM_THREADS=1
 

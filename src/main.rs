@@ -10,6 +10,10 @@ use icm_wavelet_dp::*;
 use rand::{rngs::StdRng, SeedableRng, seq::SliceRandom};
 use rand_distr::{Distribution, Uniform};
 use ndarray::{arr1, Array1, Array2, s};
+use std::thread;
+use std::sync::{Arc, Mutex};
+use std::io::Write;
+use std::fs::File;
 
 
 // Create mixed anomaly dataset with specific anomaly types
@@ -19,7 +23,7 @@ fn create_mixed_anomaly_dataset(
     contam: f64,
     anomaly_types: &[AnomType],
 ) -> LabeledDatasetM {
-    let n = 100;
+    let n = 128; // Must be power of 2 for Haar wavelets
     let m_out = 3;
     let p = 64;
     let t = linspace(0.0, 1.0, n);
@@ -64,13 +68,159 @@ fn create_mixed_anomaly_dataset(
     }
 }
 
-// ------------------------ Runner ------------------------
-fn run_dataset(
+
+fn main() {
+    let mut rng = StdRng::seed_from_u64(42);
+    let output_file = Arc::new(Mutex::new(File::create("analysis_output.txt").expect("Failed to create output file")));
+
+    // ===== Single anomaly type datasets (5% contamination each) =====
+    println!("=== Single Anomaly Type Datasets (5% contamination each) ===");
+    
+    // Prepare single anomaly datasets
+    let single_datasets: Vec<_> = anomaly::make_all_single_anomaly_datasets(&mut rng, 200)
+        .into_iter()
+        .map(|(slug, pack)| {
+            let dataset_name = format!("Single Anomaly - {}", slug);
+            let before = format!("plots/single_{}_before.png", slug);
+            let after = format!("plots/single_{}_after.png", slug);
+            
+            // Create revealed normal mask (5% of normals revealed)
+            let n_total = pack.ds.curves.len();
+            let n_normals = pack.labels.iter().filter(|&l| l == &AnomType::Normal).count();
+            let n_reveal = (n_normals as f64 * 0.05).ceil() as usize;
+            
+            let mut revealed_mask = vec![false; n_total];
+            let mut normal_indices: Vec<usize> = pack.labels.iter().enumerate()
+                .filter(|(_, label)| **label == AnomType::Normal)
+                .map(|(i, _)| i)
+                .collect();
+            normal_indices.shuffle(&mut rng);
+            
+            for i in 0..n_reveal.min(normal_indices.len()) {
+                revealed_mask[normal_indices[i]] = true;
+            }
+
+            (dataset_name, pack.ds, pack.labels, revealed_mask, before, after)
+        })
+        .collect();
+
+    // ===== Mixed anomaly type datasets (5% contamination, 5% normals revealed) =====
+    println!("\n=== Mixed Anomaly Type Datasets (5% contamination, 5% normals revealed) ===");
+    
+    // Create different combinations of anomaly types
+    let anomaly_combinations = vec![
+        vec![AnomType::Shift, AnomType::Amplitude],
+        vec![AnomType::Shape, AnomType::Trend, AnomType::Phase],
+        vec![AnomType::Decouple, AnomType::Smoothness, AnomType::NoiseBurst],
+        vec![AnomType::Shift, AnomType::Shape, AnomType::Decouple, AnomType::NoiseBurst],
+    ];
+
+    // Prepare mixed anomaly datasets
+    let mixed_datasets: Vec<_> = anomaly_combinations.iter().enumerate()
+        .map(|(i, combo)| {
+            let dataset_name = format!("Mixed Anomaly Combo {}", i + 1);
+            let mixed_ds = create_mixed_anomaly_dataset(&mut rng, 200, 0.05, combo);
+            let before = format!("plots/mixed_combo_{}_before.png", i + 1);
+            let after = format!("plots/mixed_combo_{}_after.png", i + 1);
+            
+            // Create revealed normal mask (5% of normals revealed)
+            let n_total = mixed_ds.ds.curves.len();
+            let n_normals = mixed_ds.labels.iter().filter(|&l| l == &AnomType::Normal).count();
+            let n_reveal = (n_normals as f64 * 0.05).ceil() as usize;
+            
+            let mut revealed_mask = vec![false; n_total];
+            let mut normal_indices: Vec<usize> = mixed_ds.labels.iter().enumerate()
+                .filter(|(_, label)| **label == AnomType::Normal)
+                .map(|(i, _)| i)
+                .collect();
+            normal_indices.shuffle(&mut rng);
+            
+            for i in 0..n_reveal.min(normal_indices.len()) {
+                revealed_mask[normal_indices[i]] = true;
+            }
+
+            (dataset_name, mixed_ds.ds, mixed_ds.labels, revealed_mask, before, after)
+        })
+        .collect();
+
+    // Combine all datasets
+    let mut all_datasets = single_datasets;
+    all_datasets.extend(mixed_datasets);
+
+    // Run all datasets in parallel
+    let handles: Vec<_> = all_datasets.into_iter()
+        .map(|(dataset_name, dataset, labels, revealed_mask, before_plot_path, after_plot_path)| {
+            let output_file = Arc::clone(&output_file);
+            thread::spawn(move || {
+                let output = run_single_dataset_with_output(
+                    dataset_name.clone(),
+                    dataset,
+                    labels,
+                    revealed_mask,
+                    before_plot_path,
+                    after_plot_path,
+                );
+                
+                // Write output to file
+                let mut file = output_file.lock().unwrap();
+                writeln!(file, "=== {} ===", dataset_name).unwrap();
+                writeln!(file, "{}", output).unwrap();
+                writeln!(file, "").unwrap();
+                file.flush().unwrap();
+                
+                println!("Completed analysis for: {}", dataset_name);
+            })
+        })
+        .collect();
+
+    // Wait for all threads to complete
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
+    println!("\nAll anomaly detection datasets generated and analyzed!");
+    println!("Output saved to: analysis_output.txt");
+}
+
+// Function to run a single dataset and capture its output
+fn run_single_dataset_with_output(
+    dataset_name: String,
+    dataset: DatasetM,
+    labels: Vec<AnomType>,
+    revealed_mask: Vec<bool>,
+    before_plot_path: String,
+    after_plot_path: String,
+) -> String {
+    let mut output = String::new();
+    
+    // Capture output by redirecting to our string
+    let mut rng = StdRng::seed_from_u64(42);
+    
+    // Generate before plot
+    plotting::plot_dataset_colored_with_title(&dataset, &labels, &before_plot_path, &format!("{} - Before Clustering", dataset_name));
+    output.push_str(&format!("Wrote plot: {}\n", before_plot_path));
+    
+    // Run the dataset analysis
+    run_dataset_with_output(
+        &format!("{}", dataset_name),
+        &mut rng,
+        &dataset,
+        Some(revealed_mask),
+        Some(&after_plot_path),
+        &mut output,
+    );
+    
+    output
+}
+
+// Modified run_dataset function that writes to a string instead of stdout
+fn run_dataset_with_output(
     title: &str,
     rng: &mut StdRng,
     data: &DatasetM,
     revealed_normal: Option<Vec<bool>>,
     post_plot_path: Option<&str>,
+    output: &mut String,
 ) {
     let n = data.curves.len();
     let m_out = data.m_out;
@@ -170,51 +320,59 @@ fn run_dataset(
 
         if it % 200 == 0 || it == 1 {
             let k_occ = (0..kmax).filter(|&k| !members[k].is_empty()).count();
-            println!("[{}] it {:4} | active {:2} | occupied {:2} | kept {:4}", title, it, k_active, k_occ, kept);
+            output.push_str(&format!("[{}] it {:4} | active {:2} | occupied {:2} | kept {:4}\n", title, it, k_active, k_occ, kept));
         }
     }
 
     // simple report: cluster sizes
     let mut counts = vec![0usize; kmax];
     for &zi in dp.z.iter() { counts[zi] += 1; }
-    println!("\n[{}] Final cluster sizes (nonzero):", title);
+    output.push_str(&format!("\n[{}] Final cluster sizes (nonzero):\n", title));
     for (k,c) in counts.iter().enumerate() {
         if *c > 0 {
-            println!("  k{:02}: {}", k, c);
+            output.push_str(&format!("  k{:02}: {}\n", k, c));
         }
     }
 
     if let (Some(mask), Some(k0)) = (revealed_normal.clone(), dp.normal_k) {
-        // binary metrics: Normal=1 if assigned to k0
-        let y_true: Vec<bool> = mask; // revealed normals only (unknowns ignored for "truth")
-        let y_pred: Vec<bool> = (0..n).map(|i| dp.z[i] == k0).collect();
-        let mut tp=0; let mut fp=0; let mut fn_=0;
+        // For anomaly detection: True=Normal, Predicted=Normal (assigned to normal cluster k0)
+        let y_true: Vec<bool> = mask; // true labels: true=normal, false=anomaly
+        let y_pred: Vec<bool> = (0..n).map(|i| dp.z[i] == k0).collect(); // predicted: true=normal cluster, false=anomaly cluster
+        
+        let mut tp=0; let mut fp=0; let mut fn_=0; let mut tn=0;
         for i in 0..n {
-            if !y_true[i] { continue; } // evaluate only revealed normals like your semi-supervised flow
-            let pred_pos = y_pred[i];
-            let is_pos = true;
-            match (is_pos, pred_pos) {
-                (true,true) => tp += 1,
-                (true,false)=> fn_ += 1,
-                (false,true)=> fp += 1,
-                _ => {}
+            let true_normal = y_true[i];
+            let pred_normal = y_pred[i];
+            
+            match (true_normal, pred_normal) {
+                (true, true) => tp += 1,   // True Normal correctly identified as Normal
+                (true, false) => fn_ += 1, // True Normal incorrectly identified as Anomaly  
+                (false, true) => fp += 1,  // True Anomaly incorrectly identified as Normal
+                (false, false) => tn += 1, // True Anomaly correctly identified as Anomaly
             }
         }
+        
         let prec = if tp+fp>0 { tp as f64/(tp+fp) as f64 } else { 0.0 };
         let rec  = if tp+fn_>0 { tp as f64/(tp+fn_) as f64 } else { 0.0 };
         let f1 = if prec+rec>0.0 { 2.0*prec*rec/(prec+rec) } else { 0.0 };
-        println!("[{}] Semi-supervised (revealed normals) F1 = {:.3} (tp {}, fp {}, fn {})", title, f1, tp, fp, fn_);
+        
+        // Also calculate accuracy for overall performance
+        let accuracy = (tp + tn) as f64 / (tp + tn + fp + fn_) as f64;
+        
+        output.push_str(&format!("[{}] Anomaly Detection Performance:\n", title));
+        output.push_str(&format!("  F1 Score (Normal class): {:.3} (tp {}, fp {}, fn {}, tn {})\n", f1, tp, fp, fn_, tn));
+        output.push_str(&format!("  Overall Accuracy: {:.3}\n", accuracy));
     }
 
     if let Some(path) = post_plot_path {
-        plotting::plot_by_cluster(data, &dp.z, path);
-        println!("[{}] Wrote post-clustering plot: {}", title, path);
+        plotting::plot_by_cluster_with_title(data, &dp.z, path, &format!("{} - After Clustering", title));
+        output.push_str(&format!("[{}] Wrote post-clustering plot: {}\n", title, path));
     }
 
     // Generate diagnostic plots
     let mcmc_diag_path = format!("plots/{}_mcmc_diagnostics.png", title);
     diagnostics::plot_mcmc_traces(&diagnostics, &mcmc_diag_path);
-    println!("[{}] Wrote MCMC diagnostics: {}", title, mcmc_diag_path);
+    output.push_str(&format!("[{}] Wrote MCMC diagnostics: {}\n", title, mcmc_diag_path));
 
     // Generate AUC curves if we have revealed normals (semi-supervised case)
     if let Some(mask) = revealed_normal.clone() {
@@ -225,7 +383,7 @@ fn run_dataset(
         
         let auc_path = format!("plots/{}_auc_curves.png", title);
         diagnostics::plot_auc_curves(&mask, &anomaly_scores, &auc_path);
-        println!("[{}] Wrote AUC curves: {}", title, auc_path);
+        output.push_str(&format!("[{}] Wrote AUC curves: {}\n", title, auc_path));
     }
 
     // Generate function reconstruction plots (sample a few curves)
@@ -261,8 +419,8 @@ fn run_dataset(
         .collect();
 
     let recon_path = format!("plots/{}_function_reconstruction.png", title);
-    diagnostics::plot_function_reconstruction(&original_curves, &reconstructed_curves, &wavelet_coeffs, &recon_path);
-    println!("[{}] Wrote function reconstruction: {}", title, recon_path);
+    diagnostics::plot_function_reconstruction_with_title(&original_curves, &reconstructed_curves, &wavelet_coeffs, &recon_path, &format!("{} - Function Reconstruction", title));
+    output.push_str(&format!("[{}] Wrote function reconstruction: {}\n", title, recon_path));
 
     // Generate detailed wavelet analysis
     let shrinkage_factors: Vec<f64> = (0..n_sample).map(|i| 0.5 + 0.3 * (i as f64 / n_sample as f64)).collect();
@@ -270,96 +428,9 @@ fn run_dataset(
     
     let wavelet_path = format!("plots/{}_wavelet_analysis.png", title);
     diagnostics::plot_wavelet_reconstruction_analysis(&original_curves, &reconstructed_curves, &wavelet_coeffs, &shrinkage_factors, &wavelet_path);
-    println!("[{}] Wrote wavelet analysis: {}", title, wavelet_path);
+    output.push_str(&format!("[{}] Wrote wavelet analysis: {}\n", title, wavelet_path));
 
     let shrinkage_path = format!("plots/{}_shrinkage_analysis.png", title);
     diagnostics::plot_shrinkage_analysis(&shrinkage_factors, &coeff_magnitudes, &shrinkage_path);
-    println!("[{}] Wrote shrinkage analysis: {}", title, shrinkage_path);
-}
-
-fn main() {
-    let mut rng = StdRng::seed_from_u64(42);
-
-    // ===== Single anomaly type datasets (5% contamination each) =====
-    println!("=== Single Anomaly Type Datasets (5% contamination each) ===");
-    for (slug, pack) in anomaly::make_all_single_anomaly_datasets(&mut rng, 200) {
-        let before = format!("plots/single_{}_before.png", slug);
-        plotting::plot_dataset_colored(&pack.ds, &pack.labels, &before);
-        println!("Wrote plot: {}", before);
-
-        // Create revealed normal mask (5% of normals revealed)
-        let n_total = pack.ds.curves.len();
-        let n_normals = pack.labels.iter().filter(|&l| l == &AnomType::Normal).count();
-        let n_reveal = (n_normals as f64 * 0.05).ceil() as usize;
-        
-        let mut revealed_mask = vec![false; n_total];
-        let mut normal_indices: Vec<usize> = pack.labels.iter().enumerate()
-            .filter(|(_, label)| **label == AnomType::Normal)
-            .map(|(i, _)| i)
-            .collect();
-        normal_indices.shuffle(&mut rng);
-        
-        for i in 0..n_reveal.min(normal_indices.len()) {
-            revealed_mask[normal_indices[i]] = true;
-        }
-
-        let after = format!("plots/single_{}_after.png", slug);
-        run_dataset(
-            &format!("single_anom_{}", slug),
-            &mut rng,
-            &pack.ds,
-            Some(revealed_mask),
-            Some(&after),
-        );
-    }
-
-    // ===== Mixed anomaly type datasets (5% contamination, 5% normals revealed) =====
-    println!("\n=== Mixed Anomaly Type Datasets (5% contamination, 5% normals revealed) ===");
-    
-    // Create different combinations of anomaly types
-    let anomaly_combinations = vec![
-        vec![AnomType::Shift, AnomType::Amplitude],
-        vec![AnomType::Shape, AnomType::Trend, AnomType::Phase],
-        vec![AnomType::Decouple, AnomType::Smoothness, AnomType::NoiseBurst],
-        vec![AnomType::Shift, AnomType::Shape, AnomType::Decouple, AnomType::NoiseBurst],
-    ];
-
-    for (i, combo) in anomaly_combinations.iter().enumerate() {
-        let dataset_name = format!("mixed_combo_{}", i + 1);
-        println!("\n--- {} ---", dataset_name);
-        
-        // Create mixed anomaly dataset with 5% contamination
-        let mixed_ds = create_mixed_anomaly_dataset(&mut rng, 200, 0.05, combo);
-        
-        let before = format!("plots/{}_before.png", dataset_name);
-        plotting::plot_dataset_colored(&mixed_ds.ds, &mixed_ds.labels, &before);
-        println!("Wrote plot: {}", before);
-
-        // Create revealed normal mask (5% of normals revealed)
-        let n_total = mixed_ds.ds.curves.len();
-        let n_normals = mixed_ds.labels.iter().filter(|&l| l == &AnomType::Normal).count();
-        let n_reveal = (n_normals as f64 * 0.05).ceil() as usize;
-        
-        let mut revealed_mask = vec![false; n_total];
-        let mut normal_indices: Vec<usize> = mixed_ds.labels.iter().enumerate()
-            .filter(|(_, label)| **label == AnomType::Normal)
-            .map(|(i, _)| i)
-            .collect();
-        normal_indices.shuffle(&mut rng);
-        
-        for i in 0..n_reveal.min(normal_indices.len()) {
-            revealed_mask[normal_indices[i]] = true;
-        }
-
-        let after = format!("plots/{}_after.png", dataset_name);
-        run_dataset(
-            &dataset_name,
-            &mut rng,
-            &mixed_ds.ds,
-            Some(revealed_mask),
-            Some(&after),
-        );
-    }
-
-    println!("\nAll anomaly detection datasets generated and analyzed!");
+    output.push_str(&format!("[{}] Wrote shrinkage analysis: {}\n", title, shrinkage_path));
 }

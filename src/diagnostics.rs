@@ -329,6 +329,16 @@ pub fn plot_function_reconstruction(
     _wavelet_coeffs: &[Array1<f64>],
     out_path: &str
 ) {
+    plot_function_reconstruction_with_title(original_curves, reconstructed_curves, _wavelet_coeffs, out_path, "Function Reconstruction");
+}
+
+pub fn plot_function_reconstruction_with_title(
+    original_curves: &[Array1<f64>], 
+    reconstructed_curves: &[Array1<f64>],
+    _wavelet_coeffs: &[Array1<f64>],
+    out_path: &str,
+    title: &str
+) {
     if let Some(parent) = std::path::Path::new(out_path).parent() {
         let _ = create_dir_all(parent);
     }
@@ -348,7 +358,7 @@ pub fn plot_function_reconstruction(
             .margin(15)
             .set_left_and_bottom_label_area_size(40)
             .caption(
-                format!("Function Reconstruction - Curve {}", curve_idx),
+                format!("{} - Curve {}", title, curve_idx),
                 ("sans-serif", 14)
             )
             .build_cartesian_2d(0.0..1.0, -3.0..3.0) // Adjust ranges as needed
@@ -361,17 +371,23 @@ pub fn plot_function_reconstruction(
             .draw()
             .unwrap();
 
-        // Plot original curve
+        // Plot original curve (solid blue line)
         let orig_points: Vec<(f64, f64)> = (0..original_curves[curve_idx].len())
             .map(|j| (j as f64 / (original_curves[curve_idx].len() - 1) as f64, original_curves[curve_idx][j]))
             .collect();
-        chart.draw_series(LineSeries::new(orig_points, BLUE.stroke_width(2))).unwrap();
+        chart.draw_series(LineSeries::new(orig_points, BLUE.stroke_width(3))).unwrap();
 
-        // Plot reconstructed curve
+        // Plot reconstructed curve (dashed red line)
         let recon_points: Vec<(f64, f64)> = (0..reconstructed_curves[curve_idx].len())
             .map(|j| (j as f64 / (reconstructed_curves[curve_idx].len() - 1) as f64, reconstructed_curves[curve_idx][j]))
             .collect();
         chart.draw_series(LineSeries::new(recon_points, RED.stroke_width(2))).unwrap();
+
+        // Add text labels for legend
+        chart.draw_series([
+            Text::new("Original", (0.05, 0.95), ("sans-serif", 12).into_font().color(&BLUE)),
+            Text::new("Reconstructed", (0.05, 0.90), ("sans-serif", 12).into_font().color(&RED)),
+        ]).unwrap();
     }
 
     let _ = root.titled("Function Reconstruction with Wavelet Shrinkage", ("sans-serif", 20));
@@ -423,12 +439,18 @@ pub fn plot_wavelet_reconstruction_analysis(
         let orig_points: Vec<(f64, f64)> = (0..original_curves[curve_idx].len())
             .map(|j| (j as f64 / (original_curves[curve_idx].len() - 1) as f64, original_curves[curve_idx][j]))
             .collect();
-        chart1.draw_series(LineSeries::new(orig_points, BLUE.stroke_width(2))).unwrap();
+        chart1.draw_series(LineSeries::new(orig_points, BLUE.stroke_width(3))).unwrap();
 
         let recon_points: Vec<(f64, f64)> = (0..reconstructed_curves[curve_idx].len())
             .map(|j| (j as f64 / (reconstructed_curves[curve_idx].len() - 1) as f64, reconstructed_curves[curve_idx][j]))
             .collect();
         chart1.draw_series(LineSeries::new(recon_points, RED.stroke_width(2))).unwrap();
+
+        // Add legend
+        chart1.draw_series([
+            Text::new("Original", (0.05, 0.95), ("sans-serif", 10).into_font().color(&BLUE)),
+            Text::new("Reconstructed", (0.05, 0.90), ("sans-serif", 10).into_font().color(&RED)),
+        ]).unwrap();
 
         // 2. Wavelet Coefficients
         let mut chart2 = ChartBuilder::on(&areas[start_area + 1])
