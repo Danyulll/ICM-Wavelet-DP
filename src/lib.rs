@@ -1,4 +1,6 @@
 pub mod anomaly;
+pub mod anomaly_different_locations;
+pub mod anomaly_different_types;
 pub mod data_structures;
 pub mod kernels;
 pub mod icm;
@@ -10,6 +12,8 @@ pub mod diagnostics;
 
 pub use data_structures::*;
 pub use anomaly::*;
+pub use anomaly_different_locations::*;
+pub use anomaly_different_types::*;
 pub use kernels::*;
 pub use icm::*;
 pub use wavelets::*;

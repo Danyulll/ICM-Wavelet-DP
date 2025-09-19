@@ -14,6 +14,27 @@ use std::thread;
 use std::sync::{Arc, Mutex};
 use std::io::Write;
 use std::fs::File;
+use clap::Parser;
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Run experiments in parallel (default: true)
+    #[arg(long, default_value_t = true, action = clap::ArgAction::SetTrue)]
+    parallel: bool,
+    
+    /// Run experiments serially (overrides --parallel)
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    serial: bool,
+    
+    /// Number of curves per dataset
+    #[arg(long, default_value_t = 200)]
+    n_curves: usize,
+    
+    /// Random seed for reproducibility
+    #[arg(long, default_value_t = 42)]
+    seed: u64,
+}
 
 
 // Create mixed anomaly dataset with specific anomaly types
@@ -31,7 +52,12 @@ fn create_mixed_anomaly_dataset(
 
     // "normal" ICM
     let fam = KernelFamily::Matern32;
-    let kx_norm = build_kx(&t, fam, &KernelHyper { ell: 0.22 });
+    let kx_norm = build_kx(&t, fam, &KernelHyper { 
+        ell: 0.22, 
+        alpha: 1.0, 
+        period: 1.0, 
+        gamma: 2.0 
+    });
     let mut b_norm = Array2::<f64>::zeros((m_out, m_out));
     for i in 0..m_out { b_norm[(i,i)] = 1.0; }
     b_norm[(0,1)] = 0.75; b_norm[(1,0)] = 0.75;
@@ -70,14 +96,24 @@ fn create_mixed_anomaly_dataset(
 
 
 fn main() {
-    let mut rng = StdRng::seed_from_u64(42);
+    let args = Args::parse();
+    let mut rng = StdRng::seed_from_u64(args.seed);
     let output_file = Arc::new(Mutex::new(File::create("analysis_output.txt").expect("Failed to create output file")));
-
-    // ===== Single anomaly type datasets (5% contamination each) =====
-    println!("=== Single Anomaly Type Datasets (5% contamination each) ===");
     
-    // Prepare single anomaly datasets
-    let single_datasets: Vec<_> = anomaly::make_all_single_anomaly_datasets(&mut rng, 200)
+    // Determine execution mode: serial flag overrides parallel flag
+    let parallel = args.parallel && !args.serial;
+    
+    println!("Running ICM-Wavelet-DP with parameters:");
+    println!("  Parallel execution: {}", parallel);
+    println!("  Number of curves: {}", args.n_curves);
+    println!("  Random seed: {}", args.seed);
+    println!();
+
+    // ===== EXPERIMENT 1: Same anomaly type, same temporal location across channels =====
+    println!("=== EXPERIMENT 1: Same Anomaly Type, Same Temporal Location ===");
+    
+    // Prepare single anomaly datasets (original approach)
+    let single_datasets: Vec<_> = anomaly::make_all_single_anomaly_datasets(&mut rng, args.n_curves)
         .into_iter()
         .map(|(slug, pack)| {
             let dataset_name = format!("Single Anomaly - {}", slug);
@@ -119,7 +155,7 @@ fn main() {
     let mixed_datasets: Vec<_> = anomaly_combinations.iter().enumerate()
         .map(|(i, combo)| {
             let dataset_name = format!("Mixed Anomaly Combo {}", i + 1);
-            let mixed_ds = create_mixed_anomaly_dataset(&mut rng, 200, 0.05, combo);
+            let mixed_ds = create_mixed_anomaly_dataset(&mut rng, args.n_curves, 0.05, combo);
             let before = format!("plots/mixed_combo_{}_before.png", i + 1);
             let after = format!("plots/mixed_combo_{}_after.png", i + 1);
             
@@ -143,43 +179,144 @@ fn main() {
         })
         .collect();
 
-    // Combine all datasets
-    let mut all_datasets = single_datasets;
-    all_datasets.extend(mixed_datasets);
+    // Combine all datasets for Experiment 1
+    let mut exp1_datasets = single_datasets;
+    exp1_datasets.extend(mixed_datasets);
 
-    // Run all datasets in parallel
-    let handles: Vec<_> = all_datasets.into_iter()
-        .map(|(dataset_name, dataset, labels, revealed_mask, before_plot_path, after_plot_path)| {
-            let output_file = Arc::clone(&output_file);
-            thread::spawn(move || {
-                let output = run_single_dataset_with_output(
-                    dataset_name.clone(),
-                    dataset,
-                    labels,
-                    revealed_mask,
-                    before_plot_path,
-                    after_plot_path,
-                );
-                
-                // Write output to file
-                let mut file = output_file.lock().unwrap();
-                writeln!(file, "=== {} ===", dataset_name).unwrap();
-                writeln!(file, "{}", output).unwrap();
-                writeln!(file, "").unwrap();
-                file.flush().unwrap();
-                
-                println!("Completed analysis for: {}", dataset_name);
-            })
+    // Run Experiment 1 datasets
+    run_datasets(exp1_datasets, Arc::clone(&output_file), parallel);
+
+    // ===== EXPERIMENT 2: Same anomaly type, different temporal locations per channel =====
+    println!("\n=== EXPERIMENT 2: Same Anomaly Type, Different Temporal Locations ===");
+    
+    // Prepare single anomaly datasets with different locations per channel
+    let single_datasets_diff: Vec<_> = anomaly_different_locations::make_all_single_anomaly_datasets_different_locations(&mut rng, args.n_curves)
+        .into_iter()
+        .map(|(slug, pack)| {
+            let dataset_name = format!("EXP2_Single_Anomaly - {}", slug);
+            let before = format!("plots/exp2_single_{}_before.png", slug);
+            let after = format!("plots/exp2_single_{}_after.png", slug);
+            
+            // Create revealed normal mask (5% of normals revealed)
+            let n_total = pack.ds.curves.len();
+            let n_normals = pack.labels.iter().filter(|&l| l == &AnomType::Normal).count();
+            let n_reveal = (n_normals as f64 * 0.05).ceil() as usize;
+            
+            let mut revealed_mask = vec![false; n_total];
+            let mut normal_indices: Vec<usize> = pack.labels.iter().enumerate()
+                .filter(|(_, label)| **label == AnomType::Normal)
+                .map(|(i, _)| i)
+                .collect();
+            normal_indices.shuffle(&mut rng);
+            
+            for i in 0..n_reveal.min(normal_indices.len()) {
+                revealed_mask[normal_indices[i]] = true;
+            }
+
+            (dataset_name, pack.ds, pack.labels, revealed_mask, before, after)
         })
         .collect();
 
-    // Wait for all threads to complete
-    for handle in handles {
-        handle.join().unwrap();
-    }
+    // Run Experiment 2 datasets
+    run_datasets(single_datasets_diff, Arc::clone(&output_file), parallel);
+
+    // ===== EXPERIMENT 3: Different anomaly types per channel =====
+    println!("\n=== EXPERIMENT 3: Different Anomaly Types Per Channel ===");
+    
+    // Prepare single anomaly datasets with different anomaly types per channel
+    let single_datasets_diff_types: Vec<_> = anomaly_different_types::make_all_single_anomaly_datasets_different_types(&mut rng, args.n_curves)
+        .into_iter()
+        .map(|(slug, pack)| {
+            let dataset_name = format!("EXP3_Single_Anomaly - {}", slug);
+            let before = format!("plots/exp3_single_{}_before.png", slug);
+            let after = format!("plots/exp3_single_{}_after.png", slug);
+            
+            // Create revealed normal mask (5% of normals revealed)
+            let n_total = pack.ds.curves.len();
+            let n_normals = pack.labels.iter().filter(|&l| l == &AnomType::Normal).count();
+            let n_reveal = (n_normals as f64 * 0.05).ceil() as usize;
+            
+            let mut revealed_mask = vec![false; n_total];
+            let mut normal_indices: Vec<usize> = pack.labels.iter().enumerate()
+                .filter(|(_, label)| **label == AnomType::Normal)
+                .map(|(i, _)| i)
+                .collect();
+            normal_indices.shuffle(&mut rng);
+            
+            for i in 0..n_reveal.min(normal_indices.len()) {
+                revealed_mask[normal_indices[i]] = true;
+            }
+
+            (dataset_name, pack.ds, pack.labels, revealed_mask, before, after)
+        })
+        .collect();
+
+    // Run Experiment 3 datasets
+    run_datasets(single_datasets_diff_types, Arc::clone(&output_file), parallel);
 
     println!("\nAll anomaly detection datasets generated and analyzed!");
     println!("Output saved to: analysis_output.txt");
+}
+
+// Helper function to run datasets either serially or in parallel
+fn run_datasets(
+    datasets: Vec<(String, DatasetM, Vec<AnomType>, Vec<bool>, String, String)>,
+    output_file: Arc<Mutex<File>>,
+    parallel: bool,
+) {
+    if parallel {
+        // Run all datasets in parallel
+        let handles: Vec<_> = datasets.into_iter()
+            .map(|(dataset_name, dataset, labels, revealed_mask, before_plot_path, after_plot_path)| {
+                let output_file = Arc::clone(&output_file);
+                thread::spawn(move || {
+                    let output = run_single_dataset_with_output(
+                        dataset_name.clone(),
+                        dataset,
+                        labels,
+                        revealed_mask,
+                        before_plot_path,
+                        after_plot_path,
+                    );
+                    
+                    // Write output to file
+                    let mut file = output_file.lock().unwrap();
+                    writeln!(file, "=== {} ===", dataset_name).unwrap();
+                    writeln!(file, "{}", output).unwrap();
+                    writeln!(file, "").unwrap();
+                    file.flush().unwrap();
+                    
+                    println!("Completed analysis for: {}", dataset_name);
+                })
+            })
+            .collect();
+
+        // Wait for all threads to complete
+        for handle in handles {
+            handle.join().unwrap();
+        }
+    } else {
+        // Run datasets serially
+        for (dataset_name, dataset, labels, revealed_mask, before_plot_path, after_plot_path) in datasets {
+            let output = run_single_dataset_with_output(
+                dataset_name.clone(),
+                dataset,
+                labels,
+                revealed_mask,
+                before_plot_path,
+                after_plot_path,
+            );
+            
+            // Write output to file
+            let mut file = output_file.lock().unwrap();
+            writeln!(file, "=== {} ===", dataset_name).unwrap();
+            writeln!(file, "{}", output).unwrap();
+            writeln!(file, "").unwrap();
+            file.flush().unwrap();
+            
+            println!("Completed analysis for: {}", dataset_name);
+        }
+    }
 }
 
 // Function to run a single dataset and capture its output
@@ -241,7 +378,12 @@ fn run_dataset_with_output(
     let mut clusters = Vec::with_capacity(kmax);
     for _ in 0..kmax {
         let fam = AVAIL_FAMS[Uniform::new(0, AVAIL_FAMS.len()).unwrap().sample(rng)];
-        let hyp = KernelHyper { ell: Uniform::new(0.08, 0.40).unwrap().sample(rng) };
+        let hyp = KernelHyper { 
+            ell: Uniform::new(0.08, 0.40).unwrap().sample(rng),
+            alpha: Uniform::new(0.5, 2.0).unwrap().sample(rng),
+            period: Uniform::new(0.5, 2.0).unwrap().sample(rng),
+            gamma: Uniform::new(1.0, 3.0).unwrap().sample(rng),
+        };
         let c = Cluster::new(m_out, fam, hyp, t, p);
         clusters.push(c);
     }

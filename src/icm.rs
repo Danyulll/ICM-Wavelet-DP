@@ -17,11 +17,14 @@ pub struct ICM {
     pub linv: Vec<Array2<f64>>,
     pub logdet_blocks: Vec<f64>,
     // Carlin–Chib shadows (for other families)
-    pub shadow_ell: [f64; 3], // SE, M32, M52
+    pub shadow_ell: [f64; 8], // All kernel families
     // MH steps
     pub mh_step_ell: f64,
     pub mh_step_eta: f64,
     pub mh_step_b: f64,
+    pub mh_step_alpha: f64,
+    pub mh_step_period: f64,
+    pub mh_step_gamma: f64,
     pub mh_t: usize,
 }
 
@@ -42,10 +45,13 @@ impl ICM {
             l: Vec::new(),
             linv: Vec::new(),
             logdet_blocks: Vec::new(),
-            shadow_ell: [hyp.ell, hyp.ell, hyp.ell],
+            shadow_ell: [hyp.ell, hyp.ell, hyp.ell, hyp.ell, hyp.ell, hyp.ell, hyp.ell, hyp.ell],
             mh_step_ell: 0.10,
             mh_step_eta: 0.25,
             mh_step_b: 0.10,
+            mh_step_alpha: 0.15,
+            mh_step_period: 0.15,
+            mh_step_gamma: 0.15,
             mh_t: 0,
         };
         icm.rebuild_fonly_blocks(t);
@@ -57,6 +63,11 @@ impl ICM {
             KernelFamily::SE => 0,
             KernelFamily::Matern32 => 1,
             KernelFamily::Matern52 => 2,
+            KernelFamily::RQ => 3,
+            KernelFamily::Periodic => 4,
+            KernelFamily::Exponential => 5,
+            KernelFamily::GammaExp => 6,
+            KernelFamily::White => 7,
         }
     }
 
@@ -138,15 +149,20 @@ impl ICM {
 
         // jittered chol
         let eye = Array2::<f64>::eye(dim);
-        let mut jitter = 0.0_f64;
-        let max_jitter = 1e-2_f64;
+        let mut jitter = 1e-8_f64;  // Start with small jitter
+        let max_jitter = 1e-1_f64;  // Allow larger jitter
         let l = loop {
             let try_k = &k + &(eye.clone() * jitter);
             match try_k.cholesky(UPLO::Lower) {
                 Ok(l) => break l,
-                Err(_) => {
-                    jitter = if jitter == 0.0 { 1e-10 } else { jitter * 10.0 };
-                    if jitter > max_jitter { panic!("chol failed full ICM"); }
+                Err(e) => {
+                    jitter *= 2.0;  // Double jitter each time
+                    if jitter > max_jitter { 
+                        eprintln!("Cholesky failed with jitter {:.2e}, max_jitter {:.2e}", jitter, max_jitter);
+                        eprintln!("Kernel family: {:?}, ell: {:.6}, alpha: {:.6}, period: {:.6}, gamma: {:.6}", 
+                                 self.fam, self.hyp.ell, self.hyp.alpha, self.hyp.period, self.hyp.gamma);
+                        panic!("chol failed full ICM: {:?}", e); 
+                    }
                 }
             }
         };

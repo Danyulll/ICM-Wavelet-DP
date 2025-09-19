@@ -36,7 +36,12 @@ pub fn make_single_anomaly_dataset(
 
     // "normal" ICM (same spirit/scale as your multitype dataset)
     let fam = KernelFamily::Matern32;
-    let kx_norm = build_kx(&t, fam, &KernelHyper { ell: 0.22 });
+    let kx_norm = build_kx(&t, fam, &KernelHyper { 
+        ell: 0.22, 
+        alpha: 1.0, 
+        period: 1.0, 
+        gamma: 2.0 
+    });
     let mut b_norm = Array2::<f64>::zeros((m_out, m_out));
     for i in 0..m_out { b_norm[(i,i)] = 1.0; }
     b_norm[(0,1)] = 0.75; b_norm[(1,0)] = 0.75;
@@ -229,7 +234,12 @@ pub fn make_multitype_anomaly_dataset(
 
     // "normal" ICM (same spirit as before)
     let fam = KernelFamily::Matern32;
-    let kx_norm = build_kx(&t, fam, &KernelHyper { ell: 0.22 });
+    let kx_norm = build_kx(&t, fam, &KernelHyper { 
+        ell: 0.22, 
+        alpha: 1.0, 
+        period: 1.0, 
+        gamma: 2.0 
+    });
     let mut b_norm = Array2::<f64>::zeros((m_out, m_out));
     for i in 0..m_out { b_norm[(i,i)] = 1.0; }
     b_norm[(0,1)] = 0.75; b_norm[(1,0)] = 0.75;

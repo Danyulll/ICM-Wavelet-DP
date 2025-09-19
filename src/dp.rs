@@ -128,10 +128,24 @@ pub fn mh_update_icm(
     let mut prop = c.clone();
     let d_ell: f64 = Normal::new(0.0, c.icm.mh_step_ell).unwrap().sample(rng);
     prop.icm.hyp.ell = (c.icm.hyp.ell.ln() + d_ell).exp().clamp(1e-3, 5.0);
-    // rebuild needed caches only if f-only were used; full joint builds on the fly.
+    
+    // propose alpha (log space) for RQ kernel
+    let mut prop_alpha = prop.clone();
+    let d_alpha: f64 = Normal::new(0.0, c.icm.mh_step_alpha).unwrap().sample(rng);
+    prop_alpha.icm.hyp.alpha = (c.icm.hyp.alpha.ln() + d_alpha).exp().clamp(0.1, 10.0);
+    
+    // propose period (log space) for Periodic kernel
+    let mut prop_period = prop_alpha.clone();
+    let d_period: f64 = Normal::new(0.0, c.icm.mh_step_period).unwrap().sample(rng);
+    prop_period.icm.hyp.period = (c.icm.hyp.period.ln() + d_period).exp().clamp(0.1, 10.0);
+    
+    // propose gamma (log space) for Gamma-Exponential kernel
+    let mut prop_gamma = prop_period.clone();
+    let d_gamma: f64 = Normal::new(0.0, c.icm.mh_step_gamma).unwrap().sample(rng);
+    prop_gamma.icm.hyp.gamma = (c.icm.hyp.gamma.ln() + d_gamma).exp().clamp(0.5, 5.0);
 
     // propose η (log space, per-output)
-    let mut prop2 = prop.clone();
+    let mut prop2 = prop_gamma.clone();
     for e in prop2.icm.eta.iter_mut() {
         let de: f64 = Normal::new(0.0, c.icm.mh_step_eta).unwrap().sample(rng);
         *e = (e.ln() + de).exp().clamp(1e-8, 1.0);
@@ -163,24 +177,54 @@ pub fn mh_update_icm(
 
     // scores
     let s_cur = log_post_icm_with_marginal(c, members, t, x_block, prior);
-    let s1 = log_post_icm_with_marginal(&prop, members, t, x_block, prior);
-    let s2 = log_post_icm_with_marginal(&prop2, members, t, x_block, prior);
-    let s3 = log_post_icm_with_marginal(&prop3, members, t, x_block, prior);
+    let s_ell = log_post_icm_with_marginal(&prop, members, t, x_block, prior);
+    let s_alpha = log_post_icm_with_marginal(&prop_alpha, members, t, x_block, prior);
+    let s_period = log_post_icm_with_marginal(&prop_period, members, t, x_block, prior);
+    let s_gamma = log_post_icm_with_marginal(&prop_gamma, members, t, x_block, prior);
+    let s_eta = log_post_icm_with_marginal(&prop2, members, t, x_block, prior);
+    let s_b = log_post_icm_with_marginal(&prop3, members, t, x_block, prior);
 
-    let acc1 = (s1 - s_cur).exp().min(1.0);
-    if Uniform::new(0.0,1.0).unwrap().sample(rng) < acc1 { *c = prop; }
-    let acc2 = (s2 - s_cur).exp().min(1.0);
-    if Uniform::new(0.0,1.0).unwrap().sample(rng) < acc2 { *c = prop2; }
-    let acc3 = (s3 - s_cur).exp().min(1.0);
-    if Uniform::new(0.0,1.0).unwrap().sample(rng) < acc3 { *c = prop3; }
+    // Accept/reject each parameter update
+    let acc_ell = (s_ell - s_cur).exp().min(1.0);
+    if Uniform::new(0.0,1.0).unwrap().sample(rng) < acc_ell { 
+        c.icm.hyp.ell = prop.icm.hyp.ell; 
+    }
+    
+    let acc_alpha = (s_alpha - s_cur).exp().min(1.0);
+    if Uniform::new(0.0,1.0).unwrap().sample(rng) < acc_alpha { 
+        c.icm.hyp.alpha = prop_alpha.icm.hyp.alpha; 
+    }
+    
+    let acc_period = (s_period - s_cur).exp().min(1.0);
+    if Uniform::new(0.0,1.0).unwrap().sample(rng) < acc_period { 
+        c.icm.hyp.period = prop_period.icm.hyp.period; 
+    }
+    
+    let acc_gamma = (s_gamma - s_cur).exp().min(1.0);
+    if Uniform::new(0.0,1.0).unwrap().sample(rng) < acc_gamma { 
+        c.icm.hyp.gamma = prop_gamma.icm.hyp.gamma; 
+    }
+    
+    let acc_eta = (s_eta - s_cur).exp().min(1.0);
+    if Uniform::new(0.0,1.0).unwrap().sample(rng) < acc_eta { 
+        c.icm.eta = prop2.icm.eta.clone(); 
+    }
+    
+    let acc_b = (s_b - s_cur).exp().min(1.0);
+    if Uniform::new(0.0,1.0).unwrap().sample(rng) < acc_b { 
+        c.icm.b = prop3.icm.b.clone(); 
+    }
 
     // adapt
     c.icm.mh_t += 1;
     let delta = rm_c / (c.icm.mh_t as f64);
     let upd = |s: f64| ((s - target) * delta).exp();
-    c.icm.mh_step_ell = (c.icm.mh_step_ell * upd(acc1)).clamp(0.02, 0.5);
-    c.icm.mh_step_eta = (c.icm.mh_step_eta * upd(acc2)).clamp(0.05, 0.8);
-    c.icm.mh_step_b   = (c.icm.mh_step_b   * upd(acc3)).clamp(0.02, 0.5);
+    c.icm.mh_step_ell = (c.icm.mh_step_ell * upd(acc_ell)).clamp(0.02, 0.5);
+    c.icm.mh_step_alpha = (c.icm.mh_step_alpha * upd(acc_alpha)).clamp(0.05, 0.8);
+    c.icm.mh_step_period = (c.icm.mh_step_period * upd(acc_period)).clamp(0.05, 0.8);
+    c.icm.mh_step_gamma = (c.icm.mh_step_gamma * upd(acc_gamma)).clamp(0.05, 0.8);
+    c.icm.mh_step_eta = (c.icm.mh_step_eta * upd(acc_eta)).clamp(0.05, 0.8);
+    c.icm.mh_step_b = (c.icm.mh_step_b * upd(acc_b)).clamp(0.02, 0.5);
 }
 
 // Carlin–Chib family switching (SE/M32/M52) via pseudo-priors on ell
